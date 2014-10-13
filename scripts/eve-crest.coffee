@@ -21,7 +21,9 @@ loadPrices = (done) ->
     for item in body.items
       name = item.type.name.toLowerCase()
       price = item.adjustedPrice
-      prices[name] = price
+      prices[name] =
+        price: price
+        niceName: item.type.name
     done()
 
 loadPrices () ->
@@ -32,7 +34,9 @@ module.exports = (robot) ->
   robot.respond /price( ?check)? (.*)/i, (msg) ->
     item = msg.match[2].toLowerCase()
     if prices[item]
-      msg.send numeral(prices[item]).format('0,0.00')
+      item = prices[item]
+      nicePrice = numeral(item.price).format('0,0')
+      msg.send  "#{item.niceName}: #{nicePrice} ISK"
     else
       msg.send "No prices found for '#{item}'"
 
