@@ -24,12 +24,13 @@ loadPrices = (done) ->
     for item in body.items
       name = item.type.name.toLowerCase()
       if /\sblueprint$/i.test name
-        console.log "Skipping #{name}"
+        # skip it
       else
         price = item.adjustedPrice or item.averagePrice
         prices[name] =
           price: price
           niceName: item.type.name
+          id: item.type.id
     done()
 
 findItems = (search) ->
@@ -48,9 +49,16 @@ loadPrices () ->
 module.exports = (robot) ->
 
   robot.respond /price( ?check)? (.*)/i, (msg) ->
-    item = msg.match[2].toLowerCase()
-    if prices[item]
-      item = prices[item]
+    name = msg.match[2].toLowerCase()
+
+    if prices[name]
+      item = prices[name]
+    else
+      items = findItems name
+      if items.length == 1
+        item = items[0]
+
+    if item
       if item.price < 1000
         format = '0,0.00'
       else
@@ -58,7 +66,13 @@ module.exports = (robot) ->
       nicePrice = numeral(item.price).format(format)
       msg.send  "#{item.niceName}: #{nicePrice} ISK"
     else
-      msg.send "No prices found for '#{item}'"
+      if items
+        if items.length < 10
+          msg.send "No clear match, possible items: " + items.join(', ')
+        else
+          msg.send "Search is not specific enough, please search betterer"
+      else
+        msg.send "Nothing found for '#{item}'"
 
   robot.respond /item (.*)/i, (msg) ->
     items = findItems msg.match[1]
