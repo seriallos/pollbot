@@ -21,11 +21,14 @@
     "url": "https://github.com/github/hubot.git"
   },
   "dependencies": {
+    "clark": "0.0.6",
     "hubot": ">= 2.6.0 < 3.0.0",
     "hubot-irc": "^0.2.7",
+    "hubot-plusplus": "^1.1.0",
     "hubot-scripts": ">= 2.5.0 < 3.0.0",
     "numeral": "^1.5.3",
-    "request": "^2.45.0"
+    "request": "^2.45.0",
+    "underscore": "^1.7.0"
   },
   "engines": {
     "node": ">= 0.8.x",
