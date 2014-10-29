@@ -68,4 +68,4 @@ module.exports = (robot) ->
     if char?
       msg.send "#{user}'s main character is #{char.name} in #{char.corporationName}."
     else
-      msg.send "#{user} does not have a main character set.  Look at 'set char' help"
+      msg.send "#{user} does not have a main character set.  Look at 'set main' help"
