@@ -29,6 +29,9 @@ charKey = (user) ->
   key = "#{user}.eve.char"
   return key
 
+getUsername = (msg) ->
+  return msg.message.user.name
+
 characters = (keyID, vCode, done) ->
   opts = getBaseOpts keyID, vCode, "account/Characters"
   request opts, (err, res, body) ->
@@ -46,20 +49,22 @@ module.exports = (robot) ->
     keyID = msg.match[2]
     vCode = msg.match[3]
 
+    console.log msg
+
     characters keyID, vCode, (chars) ->
       if not chars[char]
         msg.send "#{char} not found for that account"
       else
         chars[char].keyID = keyID
         chars[char].vCode = vCode
-        robot.brain.set charKey(msg.user), chars[char]
+        robot.brain.set charKey(getUsername(msg)), chars[char]
         msg.send "Saved #{char} as your main character"
 
   robot.respond /get main( (.*))?$/i, (msg) ->
     if msg.match[2]?
       user = msg.match[2]
     else
-      user = msg.user
+      user = getUsername(msg)
 
     char = robot.brain.get charKey(user)
     if char?
