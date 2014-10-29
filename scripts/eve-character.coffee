@@ -49,8 +49,6 @@ module.exports = (robot) ->
     keyID = msg.match[2]
     vCode = msg.match[3]
 
-    console.log msg
-
     characters keyID, vCode, (chars) ->
       if not chars[char]
         msg.send "#{char} not found for that account"
