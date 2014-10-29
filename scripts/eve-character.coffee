@@ -6,6 +6,8 @@
 #
 # Commands:
 #   hubot set main <name> <keyID> <vCode> - Allows you to track this character
+#   hubot get main - Displays your main EVE character, if set
+#   hubot get main <name> - Displays the main EVE character for IRC user <name>, if set
 
 
 request = require 'request'
