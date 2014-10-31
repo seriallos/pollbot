@@ -8,9 +8,21 @@
 #   numeral
 #
 # Commands:
-#   hubot set main <name> <keyID> <vCode> - Allows you to track this character
+#   hubot add char(acter)? <eve-name> <keyID> <vCode> - Links a character to your IRC name
+#   hubot set main <eve-name> - sets an added character as your main
 #   hubot get main - Displays your main EVE character, if set
-#   hubot get main <name> - Displays the main EVE character for IRC user <name>, if set
+#   hubot get main <irc-handle> - Displays the main EVE character for IRC user <name>, if set
+#   hubot get char(acter)?s - Displays all characters you have added
+#   hubot get char(acter)?s <irc-handle> - Displays all characters for the IRC user
+#   hubot skill queue - Displays skill queue information for your main character
+#   hubot skill queue <eve-name> - Displays skill queue information for the specified characters
+#   hubot skill points - Displays your main character's total SP
+#   hubot skill points <eve-name> - Displays total SP for the specified character
+#
+# Storage:
+#   eve.chars.<eve-name>:
+#     <data from CharacterInfo API>
+#   eve.main.<irc-handle>: <eve-name>
 
 
 request = require 'request'
@@ -35,8 +47,6 @@ getBaseOpts = (keyID, vCode, path) ->
       vCode: vCode
   return opts
 
-typeIsArray = Array.isArray || ( value ) -> return {}.toString.call( value ) is '[object Array]'
-
 romanNumeral = (num) ->
   return switch num
     when 1 then "I"
@@ -45,15 +55,37 @@ romanNumeral = (num) ->
     when 4 then "IV"
     when 5 then "V"
 
-charKey = (user) ->
-  key = "#{user}.eve.char"
-  return key
-
 getUsername = (msg) ->
   return msg.message.user.name
 
-getMainChar = (user) ->
-  return robot.brain.get charKey(user)
+mainKey = (ircUserName) ->
+  if ircUserName?
+    key = "eve.mains.#{ircUserName.toLowerCase()}"
+    return key
+  else
+    return null
+
+charKey = (charName) ->
+  if charName?
+    key = "eve.chars.#{charName.toLowerCase()}"
+    return key
+  else
+    return null
+
+getMainName = (ircUserName) ->
+  return robot.brain.get mainKey(ircUserName)
+
+setMainName = (ircUserName, mainName) ->
+  robot.brain.set mainKey(ircUserName), mainName.toLowerCase()
+
+getMainChar = (ircUserName) ->
+  return getChar(getMainName(ircUserName))
+
+getChar = (charName) ->
+  return robot.brain.get charKey(charName)
+
+setChar = (charName, char) ->
+  robot.brain.set charKey(charName), char
 
 getApiErr = (json) ->
   if json.eveapi.error?
@@ -91,7 +123,7 @@ characters = (keyID, vCode, done) ->
       else
         chars = {}
         for char in json.eveapi[0].result[0].rowset[0].row
-          chars[char.name] = char
+          chars[char.name.toLowerCase()] = char
         done null, chars
 
 skillQueue = (char, done) ->
@@ -137,10 +169,10 @@ module.exports = (robot) ->
 
     console.log "Skills loaded"
 
-    robot.respond /set main (.*) (.*) (.*)/i, (msg) ->
-      char = msg.match[1]
-      keyID = msg.match[2]
-      vCode = msg.match[3]
+    robot.respond /add char(acter)? (.*) (.*) (.*)/i, (msg) ->
+      char = msg.match[2].toLowerCase()
+      keyID = msg.match[3]
+      vCode = msg.match[4]
 
       characters keyID, vCode, (err, chars) ->
         if err
@@ -151,8 +183,12 @@ module.exports = (robot) ->
           else
             chars[char].keyID = keyID
             chars[char].vCode = vCode
-            robot.brain.set charKey(getUsername(msg)), chars[char]
-            msg.send "Saved #{char} as your main character"
+            setChar char, chars[char]
+            if not getMainName(getUsername(msg))
+              setMainName getUsername(msg), char
+              msg.send "Added #{char} as your main character"
+            else
+              msg.send "Added #{char} as an additional character"
 
     robot.respond /get main( (.*))?$/i, (msg) ->
       if msg.match[2]?
@@ -168,14 +204,15 @@ module.exports = (robot) ->
 
     robot.respond /skill points( (.*))?/i, (msg) ->
       if msg.match[2]?
-        user = msg.match[2]
+        charName = msg.match[2]
       else
         user = getUsername(msg)
+        charName = getMainName(user)
 
-      char = getMainChar(user)
+      char = getChar charName
 
       if not char?
-        msg.send "No main character found for #{user}. Look at 'set main' help"
+        msg.send "I don't know about #{charName}"
       else
         skillPoints char, (err, points) ->
           nicePoints = numeral(points).format("0,0")
@@ -183,14 +220,15 @@ module.exports = (robot) ->
 
     robot.respond /skill queue( (.*))?/i, (msg) ->
       if msg.match[2]?
-        user = msg.match[2]
+        charName = msg.match[2]
       else
         user = getUsername(msg)
+        charName = getMainName(user)
 
-      char = getMainChar(user)
+      char = getChar charName
 
       if not char?
-        msg.send "No main character found for #{user}. Look at 'set main' help"
+        msg.send "I don't know about #{charName}"
       else
         skillQueue char, (err, queue) ->
           if err
