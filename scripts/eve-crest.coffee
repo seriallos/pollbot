@@ -39,7 +39,7 @@ findItems = (search) ->
   re = new RegExp(search,'i')
   for name, item of prices
     if name.match re
-      results.push item.niceName
+      results.push item
   return results
 
 
