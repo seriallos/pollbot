@@ -157,8 +157,10 @@ skillPoints = (char, done) ->
         done apiErr, null
       else
         sp = 0
-        for skill in json.eveapi[0].result[0].rowset[0].row
-          sp += skill.skillpoints
+        for rowset in json.eveapi[0].result[0].rowset
+          if rowset.name == 'skills'
+            for skill in rowset.row
+              sp += skill.skillpoints
         done null, sp
 
 module.exports = (robot) ->
