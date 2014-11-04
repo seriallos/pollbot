@@ -3,9 +3,13 @@
 #
 # Commands:
 #   hubot price( ?check)? <item> - Returns average price for item.
+#
+# Dependencies
+#   lodash
 
 request = require 'request'
 numeral = require 'numeral'
+_ = require 'lodash'
 
 prices = {}
 
@@ -82,4 +86,4 @@ module.exports = (robot) ->
     else if items.length > max
       msg.send "More than #{max} items found (#{items.length}), try a better search"
     else
-      msg.send items.join(', ')
+      msg.send _.map(items, (item) -> item.niceName).join(', ')
