@@ -72,7 +72,7 @@ module.exports = (robot) ->
     else
       if items
         if items.length < 10
-          msg.send "No clear match, possible items: " + items.join(', ')
+          msg.send "No clear match, possible items: " + _.map(items, (item) -> item.niceName).join(', ')
         else
           msg.send "Search is not specific enough, please search betterer"
       else
