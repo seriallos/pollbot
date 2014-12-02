@@ -11,10 +11,13 @@
 #
 # Storage:
 #   eve.chars.<eve-name>:
-#     <data from CharacterInfo API>
+#     keyID
+#     vCode
+#     ...fields from character API
 #   eve.main.<irc-handle>: <eve-name>
 #   eve.corp.<irc-handle>:
-#     <corp keys>
+#     keyID
+#     vCode
 #
 # Commands:
 #   hubot add char(acter)? <eve-name> <keyID> <vCode> - Links a character to your IRC name
@@ -28,6 +31,8 @@
 #   hubot skill points - Displays your main character's total SP
 #   hubot skill points <eve-name> - Displays total SP for the specified character
 #   hubot corp key <keyID> <vCode> - Link a corp to your IRC name
+#   hubot towers - Reports fuel and stront status for corp POSes
+#   hubot pos inventory <item name> - Reports quantity of <item name> in your corp POSes
 
 fs = require 'fs'
 util = require 'util'
@@ -139,70 +144,81 @@ getApiErr = (json) ->
 parseXmlBodyToJson = (body) ->
   return parser.toJson(body,{object: true, arrayNotation: true})
 
+requestAndJsonify = (opts, done) ->
+  if not opts.headers?
+    opts.headers = {}
+  opts.headers['User-Agent'] = 'Hubot Plugin by Bellatroix - sollaires@gmail.com (nodejs:request)'
+  request opts, (err, res, body) ->
+    if err
+      done err, null
+    else
+      json = parseXmlBodyToJson body
+      apiErr = getApiErr json
+      if apiErr
+        done apiErr
+      else
+        done null, json
+
 loadSkills = (done) ->
   opts =
     uri: "#{api}/eve/SkillTree.xml.aspx"
 
-  request opts, (err, res, body) ->
-    skillLookup = {}
-    json = parseXmlBodyToJson body
-    for group in json.eveapi[0].result[0].rowset[0].row
-      for skill in group.rowset[0].row
-        skillLookup[skill.typeID] = skill
-    done()
+  requestAndJsonify opts, (err, json) ->
+    if err then done err
+    else
+      skillLookup = {}
+      for group in json.eveapi[0].result[0].rowset[0].row
+        for skill in group.rowset[0].row
+          skillLookup[skill.typeID] = skill
+      done()
 
 characters = (keyID, vCode, done) ->
   opts = getBaseOpts keyID, vCode, "account/Characters"
-  request opts, (err, res, body) ->
-    if err
-      done err, null
+  requestAndJsonify opts, (err, json) ->
+    if err then done err
     else
-      json = parseXmlBodyToJson body
-      apiErr = getApiErr json
-      if apiErr
-        done apiErr
-      else
-        chars = {}
-        for char in json.eveapi[0].result[0].rowset[0].row
-          chars[char.name.toLowerCase()] = char
-        done null, chars
+      chars = {}
+      for char in json.eveapi[0].result[0].rowset[0].row
+        chars[char.name.toLowerCase()] = char
+      done null, chars
 
 skillQueue = (char, done) ->
   opts = getBaseOpts char.keyID, char.vCode, "char/SkillQueue"
   opts.qs.characterID = char.characterID
-  request opts, (err, res, body) ->
-    if err
-      done err, null
+  requestAndJsonify opts, (err, json) ->
+    if err then done err
     else
-      json = parseXmlBodyToJson body
-      apiErr = getApiErr json
-      if apiErr
-        done apiErr
-      else
-        queue = []
-        for skill in json.eveapi[0].result[0].rowset[0].row
-          skill.serverTime = json.eveapi.currentTime
-          queue.push skill
-        done null, queue
+      queue = []
+      for skill in json.eveapi[0].result[0].rowset[0].row
+        skill.serverTime = json.eveapi.currentTime
+        queue.push skill
+      done null, queue
 
 skillPoints = (char, done) ->
   opts = getBaseOpts char.keyID, char.vCode, "char/CharacterSheet"
   opts.qs.characterID = char.characterID
-  request opts, (err, res, body) ->
-    if err
-      done err, null
+  requestAndJsonify opts, (err, json) ->
+    if err then done err
     else
-      json = parseXmlBodyToJson body
-      apiErr = getApiErr json
-      if apiErr
-        done apiErr, null
-      else
-        sp = 0
-        for rowset in json.eveapi[0].result[0].rowset
-          if rowset.name == 'skills'
-            for skill in rowset.row
-              sp += skill.skillpoints
-        done null, sp
+      sp = 0
+      for rowset in json.eveapi[0].result[0].rowset
+        if rowset.name == 'skills'
+          for skill in rowset.row
+            sp += skill.skillpoints
+      done null, sp
+
+corpItemLocation = (corp, itemIds, done) ->
+  opts = getBaseOpts corp.keyID, corp.vCode, "corp/Locations"
+  if not _.isArray itemIds
+    itemIds = [itemIds]
+  opts.qs.IDs = itemIds.join(',')
+  requestAndJsonify opts, (err, json) ->
+    if err then done err
+    else
+      itemNames = {}
+      for item in json.eveapi[0].result[0].rowset[0].row
+        itemNames[item.itemID] = item.itemName
+      done null, itemNames
 
 posStateName = (posState) ->
   return switch posState
@@ -214,40 +230,37 @@ posStateName = (posState) ->
 
 posList = (corp, done) ->
   opts = getBaseOpts corp.keyID, corp.vCode, "corp/StarbaseList"
-  request opts, (err, res, body) ->
-    if err
-      done err, null
+  requestAndJsonify opts, (err, json) ->
+    if err then done err
     else
-      json = parseXmlBodyToJson body
-      apiErr = getApiErr json
-      if apiErr
-        done apiErr, null
-      else
-        towers = {}
-        funcs = []
-        for tower in json.eveapi[0].result[0].rowset[0].row
-          towerInfo =
-            typeId: tower.typeID
-            locationId: tower.locationID
-            moonId: tower.moonID
-            stateId: tower.state
-            stateName: posStateName(tower.state)
-          towers[ tower.itemID ] = towerInfo
-          tmp = (id, typeId) ->
-            funcs.push (cb) ->
-              posDetail corp, id, typeId, cb
-          tmp(tower.itemID, tower.typeID)
+      towers = {}
+      funcs = []
+      for tower in json.eveapi[0].result[0].rowset[0].row
+        towerInfo =
+          typeId: tower.typeID
+          locationId: tower.locationID
+          moonId: tower.moonID
+          stateId: tower.state
+          stateName: posStateName(tower.state)
+        towers[tower.itemID] = towerInfo
+        tmp = (id, typeId) ->
+          funcs.push (cb) ->
+            posDetail corp, id, typeId, cb
+        tmp(tower.itemID, tower.typeID)
 
-        async.parallel(
-          funcs,
-          (err, results) ->
-            if err
-              done err, null
-            else
-              for tower in results
-                towers[tower.itemId] = _.merge towers[tower.itemId], tower
+      async.parallel(
+        funcs,
+        (err, results) ->
+          if err
+            done err, null
+          else
+            for tower in results
+              towers[tower.itemId] = _.merge towers[tower.itemId], tower
+            corpItemLocation corp, _.keys(towers), (err, towerNames) ->
+              for towerId, towerName of towerNames
+                towers[towerId].name = towerName
               done null, towers
-        )
+      )
 
 towerAttributes = (towerTypeId) ->
   stats =
@@ -335,37 +348,59 @@ towerAttributes = (towerTypeId) ->
 posDetail = (corp, towerId, towerType, done) ->
   opts = getBaseOpts corp.keyID, corp.vCode, "corp/StarbaseDetail"
   opts.qs.itemId = towerId
-  request opts, (err, res, body) ->
-    if err
-      done err, null
+  requestAndJsonify opts, (err, json) ->
+    if err then done err
     else
-      json = parseXmlBodyToJson body
-      apiErr = getApiErr json
-      if apiErr
-        done apiErr, null
-      else
-        towerDetail =
-          itemId: towerId
+      towerDetail =
+        itemId: towerId
 
-        fuels = json.eveapi[0].result[0].rowset[0].row
-        for fuel in fuels
-          if gTypes[fuel.typeID] == 'Strontium Clathrates'
-            strontSize = 3
-            towerDetail.stront = fuel.quantity
-            towerDetail.strontSize = fuel.quantity * strontSize
-          else
-            fuelSize = 5
-            towerDetail.curFuel = fuel.quantity
-            towerDetail.curFuelSize = fuel.quantity * fuelSize
+      fuels = json.eveapi[0].result[0].rowset[0].row
+      for fuel in fuels
+        if gTypes[fuel.typeID] == 'Strontium Clathrates'
+          strontSize = 3
+          towerDetail.stront = fuel.quantity
+          towerDetail.strontSize = fuel.quantity * strontSize
+        else
+          fuelSize = 5
+          towerDetail.curFuel = fuel.quantity
+          towerDetail.curFuelSize = fuel.quantity * fuelSize
 
-        towerDetail = _.merge towerDetail, towerAttributes(towerType)
+      towerDetail = _.merge towerDetail, towerAttributes(towerType)
 
-        towerDetail.fuelHours = towerDetail.curFuel / towerDetail.fuelPerHour
-        towerDetail.strontHours = towerDetail.stront / towerDetail.strontPerHour
-        towerDetail.fuelPct = 100 * (towerDetail.curFuelSize / towerDetail.fuelMax)
-        towerDetail.strontPct = 100 * (towerDetail.strontSize / towerDetail.strontMax)
+      towerDetail.fuelHours = towerDetail.curFuel / towerDetail.fuelPerHour
+      towerDetail.strontHours = towerDetail.stront / towerDetail.strontPerHour
+      towerDetail.fuelPct = 100 * (towerDetail.curFuelSize / towerDetail.fuelMax)
+      towerDetail.strontPct = 100 * (towerDetail.strontSize / towerDetail.strontMax)
 
-        done null, towerDetail
+      done null, towerDetail
+
+corpAssetList = (corp, done) ->
+  opts = getBaseOpts corp.keyID, corp.vCode, "corp/AssetList"
+  requestAndJsonify opts, (err, json) ->
+    if err then done err
+    else
+      interestingContainers = [
+        'Corporate Hangar Array'
+        'Ship Maintenance Array'
+        'Personal Hangar Array'
+      ]
+      inventory = {}
+      for row in json.eveapi[0].result[0].rowset[0].row
+        locationId = row.locationID
+        containerTypeId = row.typeID
+        if gTypes[containerTypeId] in interestingContainers
+          for item in row.rowset[0].row
+            if inventory[item.typeID]?
+              inventory[item.typeID] += item.quantity
+            else
+              inventory[item.typeID] = item.quantity
+      done null, inventory
+
+corpAssetSearch = (corp, itemId, done) ->
+  corpAssetList corp, (err, inventory) ->
+    if err then done err
+    else
+      done null, inventory[itemId] || 0
 
 module.exports = (robot) ->
 
@@ -483,7 +518,29 @@ module.exports = (robot) ->
           else
             for towerId, tower of towers
               fuelDuration = moment.duration(tower.fuelHours, 'hours')
-              out = "#{gLocations[tower.moonId]}: #{gTypes[tower.typeId]} is #{tower.stateName}."
+              out = "#{gLocations[tower.moonId]}: #{tower.name} (#{gTypes[tower.typeId]}) is #{tower.stateName}."
               if tower.stateName == 'Online'
                 out += "  It has enough fuel for #{fuelDuration.humanize()} and stront for #{Math.round(tower.strontHours)} hours."
               msg.send out
+
+    robot.respond /test corp assets/i, (msg) ->
+      corp = getCorpApiKey(getUsername(msg))
+
+      if not corp?
+        msg.send "You don't have a corp API key set up"
+      else
+        corpAssetList corp, (err, assets) ->
+          msg.send "Testing corp assets - data in console"
+
+    robot.respond /pos inventory (.*)/i, (msg) ->
+      itemName = msg.match[1]
+      corp = getCorpApiKey(getUsername(msg))
+
+      if not corp?
+        msg.send "You don't have a corp API key set up"
+      else
+        itemId = gTypeNameToId[itemName]
+        corpAssetSearch corp, itemId, (err, quantity) ->
+          if err then msg.send "Error: #{err}"
+          else
+            msg.send "#{itemName}: #{quantity}"
