@@ -6,6 +6,15 @@
 #   moment
 #   lodash
 #   numeral
+#   js-yaml
+#   async
+#
+# Storage:
+#   eve.chars.<eve-name>:
+#     <data from CharacterInfo API>
+#   eve.main.<irc-handle>: <eve-name>
+#   eve.corp.<irc-handle>:
+#     <corp keys>
 #
 # Commands:
 #   hubot add char(acter)? <eve-name> <keyID> <vCode> - Links a character to your IRC name
@@ -18,26 +27,41 @@
 #   hubot skill queue <eve-name> - Displays skill queue information for the specified characters
 #   hubot skill points - Displays your main character's total SP
 #   hubot skill points <eve-name> - Displays total SP for the specified character
-#
-# Storage:
-#   eve.chars.<eve-name>:
-#     <data from CharacterInfo API>
-#   eve.main.<irc-handle>: <eve-name>
+#   hubot corp key <keyID> <vCode> - Link a corp to your IRC name
 
+fs = require 'fs'
+util = require 'util'
 
 request = require 'request'
 parser = require 'xml2json'
 moment = require 'moment'
-util = require 'util'
 _ = require 'lodash'
 numeral = require 'numeral'
+yaml = require 'js-yaml'
+async = require 'async'
 
 api = "https://api.eveonline.com"
 skillLookup = {}
 
+gLocations = {}
+gTypes = {}
+
+try
+  console.log "Loading Types"
+  gTypes = yaml.safeLoad(fs.readFileSync('./types.yaml'))
+  console.log "Types loaded"
+
+  gTypeNameToId = _.invert gTypes
+
+  console.log "Loading Locations"
+  gLocations = yaml.safeLoad(fs.readFileSync('./locations.yaml'))
+  console.log "Locations loaded"
+catch e
+  console.log e
+  process.exit 2
+
 dd = (obj) ->
   console.log util.inspect(obj,{depth:null})
-
 
 getBaseOpts = (keyID, vCode, path) ->
   opts =
@@ -72,6 +96,13 @@ charKey = (charName) ->
   else
     return null
 
+corpKey = (ircUserName) ->
+  if ircUserName?
+    key = "eve.corp.#{ircUserName.toLowerCase()}"
+    return key
+  else
+    return null
+
 getMainName = (ircUserName) ->
   return robot.brain.get mainKey(ircUserName)
 
@@ -87,8 +118,18 @@ getChar = (charName) ->
 setChar = (charName, char) ->
   robot.brain.set charKey(charName), char
 
+getCorpApiKey = (ircUserName) ->
+  return robot.brain.get corpKey(ircUserName)
+
+setCorpApiKey = (ircUserName, keyID, vCode) ->
+  key = corpKey(ircUserName)
+  data =
+    keyID: keyID
+    vCode: vCode
+  robot.brain.set key, data
+
 getApiErr = (json) ->
-  if json.eveapi.error?
+  if json.eveapi[0].error?
     return new Error switch json.eveapi[0].error[0].code
       when 221 then "API key does not have proper permissions"
       else json.eveapi[0].error[0].$t
@@ -162,6 +203,169 @@ skillPoints = (char, done) ->
             for skill in rowset.row
               sp += skill.skillpoints
         done null, sp
+
+posStateName = (posState) ->
+  return switch posState
+    when 0 then "Unanchored"
+    when 1 then "Anchored"
+    when 2 then "Onlining"
+    when 3 then "Reinforced"
+    when 4 then "Online"
+
+posList = (corp, done) ->
+  opts = getBaseOpts corp.keyID, corp.vCode, "corp/StarbaseList"
+  request opts, (err, res, body) ->
+    if err
+      done err, null
+    else
+      json = parseXmlBodyToJson body
+      apiErr = getApiErr json
+      if apiErr
+        done apiErr, null
+      else
+        towers = {}
+        funcs = []
+        for tower in json.eveapi[0].result[0].rowset[0].row
+          towerInfo =
+            typeId: tower.typeID
+            locationId: tower.locationID
+            moonId: tower.moonID
+            stateId: tower.state
+            stateName: posStateName(tower.state)
+          towers[ tower.itemID ] = towerInfo
+          tmp = (id, typeId) ->
+            funcs.push (cb) ->
+              posDetail corp, id, typeId, cb
+          tmp(tower.itemID, tower.typeID)
+
+        async.parallel(
+          funcs,
+          (err, results) ->
+            if err
+              done err, null
+            else
+              for tower in results
+                towers[tower.itemId] = _.merge towers[tower.itemId], tower
+              done null, towers
+        )
+
+towerAttributes = (towerTypeId) ->
+  stats =
+    smallNormal:
+      strontMax: 12500
+      fuelMax: 35000
+      fuelPerHour: 10
+      strontPerHour: 100
+    smallFaction:
+      strontMax: 12500
+      fuelMax: 35000
+      fuelPerHour: 9
+      strontPerHour: 100
+    smallFactionRare:
+      strontMax: 12500
+      fuelMax: 35000
+      fuelPerHour: 8
+      strontPerHour: 100
+    mediumNormal:
+      strontMax: 25000
+      fuelMax: 70000
+      fuelPerHour: 20
+      strontPerHour: 200
+    mediumFaction:
+      strontMax: 25000
+      fuelMax: 70000
+      fuelPerHour: 18
+      strontPerHour: 200
+    mediumFactionRare:
+      strontMax: 25000
+      fuelMax: 70000
+      fuelPerHour: 16
+      strontPerHour: 200
+    largeNormal:
+      strontMax: 50000
+      fuelMax: 140000
+      fuelPerHour: 40
+      strontPerHour: 400
+    largeFaction:
+      strontMax: 50000
+      fuelMax: 140000
+      fuelPerHour: 36
+      strontPerHour: 400
+    largeFactionRare:
+      strontMax: 50000
+      fuelMax: 140000
+      fuelPerHour: 32
+      strontPerHour: 400
+
+  prefixes =
+    Normal: [
+      'Amarr'
+      'Caldari'
+      'Gallente'
+      'Minmatar'
+    ]
+    Faction: [
+      'Blood'
+      'Sansha'
+      'Guristas'
+      'Serpentis'
+      'Angel'
+    ]
+    FactionRare: [
+      'Dark Blood'
+      'True Sansha'
+      'Dread Guristas'
+      'Shadow'
+      'Domination'
+    ]
+  sizeMap =
+    'small': ' Small'
+    'medium': ' Medium'
+    'large': ''
+  towerMap = {}
+  for type, types of prefixes
+    for prefix in types
+      for size, suffix of sizeMap
+        name = "#{prefix} Control Tower#{suffix}"
+        towerMap[name] = "#{size}#{type}"
+
+  towerType = towerMap[gTypes[towerTypeId]]
+  return stats[towerType]
+
+posDetail = (corp, towerId, towerType, done) ->
+  opts = getBaseOpts corp.keyID, corp.vCode, "corp/StarbaseDetail"
+  opts.qs.itemId = towerId
+  request opts, (err, res, body) ->
+    if err
+      done err, null
+    else
+      json = parseXmlBodyToJson body
+      apiErr = getApiErr json
+      if apiErr
+        done apiErr, null
+      else
+        towerDetail =
+          itemId: towerId
+
+        fuels = json.eveapi[0].result[0].rowset[0].row
+        for fuel in fuels
+          if gTypes[fuel.typeID] == 'Strontium Clathrates'
+            strontSize = 3
+            towerDetail.stront = fuel.quantity
+            towerDetail.strontSize = fuel.quantity * strontSize
+          else
+            fuelSize = 5
+            towerDetail.curFuel = fuel.quantity
+            towerDetail.curFuelSize = fuel.quantity * fuelSize
+
+        towerDetail = _.merge towerDetail, towerAttributes(towerType)
+
+        towerDetail.fuelHours = towerDetail.curFuel / towerDetail.fuelPerHour
+        towerDetail.strontHours = towerDetail.stront / towerDetail.strontPerHour
+        towerDetail.fuelPct = 100 * (towerDetail.curFuelSize / towerDetail.fuelMax)
+        towerDetail.strontPct = 100 * (towerDetail.strontSize / towerDetail.strontMax)
+
+        done null, towerDetail
 
 module.exports = (robot) ->
 
@@ -260,4 +464,26 @@ module.exports = (robot) ->
 
             msg.send out
 
+    robot.respond /corp key (.*) (.*)/i, (msg) ->
+      username = getUsername msg
+      keyID = msg.match[1]
+      vCode = msg.match[2]
+      setCorpApiKey username, keyID, vCode
+      msg.send "Corp key set for #{username}"
 
+    robot.respond /towers/i, (msg) ->
+      corp = getCorpApiKey(getUsername(msg))
+
+      if not corp?
+        msg.send "You don't have a corp API key set up"
+      else
+        posList corp, (err, towers) ->
+          if err
+            msg.send "Unable to get tower list: #{err}"
+          else
+            for towerId, tower of towers
+              fuelDuration = moment.duration(tower.fuelHours, 'hours')
+              out = "#{gLocations[tower.moonId]}: #{gTypes[tower.typeId]} is #{tower.stateName}."
+              if tower.stateName == 'Online'
+                out += "  It has enough fuel for #{fuelDuration.humanize()} and stront for #{Math.round(tower.strontHours)} hours."
+              msg.send out
