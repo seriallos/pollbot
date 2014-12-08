@@ -156,6 +156,20 @@ getApiErr = (json) ->
   else
     return false
 
+itemSearch = (items, itemSearch) ->
+  results = []
+  re = new RegExp(".*#{itemSearch}.*",'i')
+  for itemId, itemName of items
+    itemInfo =
+      itemId: itemId
+      itemName: itemName
+    # exact match, go ahead and return it
+    if itemName.toLowerCase() == itemSearch.toLowerCase()
+      return [ itemInfo ]
+    if itemName.match re
+      results.push { itemId: itemId, itemName: itemName }
+  return results
+
 parseXmlBodyToJson = (body) ->
   return parser.toJson(body,{object: true, arrayNotation: true})
 
@@ -420,11 +434,14 @@ corpAssetList = (corp, done) ->
               inventory[item.typeID] = item.quantity
       done null, inventory
 
-corpAssetSearch = (corp, itemId, done) ->
+corpAssetSearch = (corp, itemIds, done) ->
   corpAssetList corp, (err, inventory) ->
     if err then done err
     else
-      done null, inventory[itemId] || 0
+      results = {}
+      for id in itemIds
+        results[id] = inventory[id] || 0
+      done null, results
 
 module.exports = (robot) ->
 
@@ -582,11 +599,28 @@ module.exports = (robot) ->
         if not corp?
           msg.send "You don't have a corp API key set up"
         else
-          itemId = gTypeNameToId[itemName]
-          corpAssetSearch corp, itemId, (err, quantity) ->
-            if err then msg.send "Error: #{err}"
-            else
-              msg.send "#{itemName}: #{quantity}"
+          maxResults = 10
+          items = itemSearch gTypes, itemName
+          if items.length == 0
+            msg.send "No market item found for '#{itemName}'"
+          else if items.length <= maxResults
+            itemIds = []
+            itemNames = []
+            for item in items
+              itemIds.push item.itemId
+              itemNames.push item.itemName
+            corpAssetSearch corp, itemIds, (err, results) ->
+              if err then msg.send "Error: #{err}"
+              else
+                found = false
+                for id, quantity of results
+                  if quantity > 0
+                    found = true
+                    msg.send "#{gTypes[id]}: #{quantity}"
+                if not found
+                  msg.send "None of the following found: #{itemNames.join(', ')}"
+          else
+            msg.send "Search was too generic, returned #{items.length} possible items"
 
       robot.respond /pos expect ([0-9]+) (.*)/i, (msg) ->
         num = msg.match[1]
@@ -596,6 +630,16 @@ module.exports = (robot) ->
         if not corp?
           msg.send "You don't have a corp API key set up"
         else
-          msg.send "TBD"
+          maxResults = 10
+          items = itemSearch gTypes, itemName
+          if items.length == 0
+            msg.send "No market item found for '#{itemName}'"
+          else if items.length == 1
+            msg.send "1 item found"
+          else if items.length <= maxResults
+            itemNames = (item.itemName for item in items)
+            msg.send "Ambiguous search, did you mean one of these: #{itemName.join(', ')}"
+          else
+            msg.send "Search was too generic, returned #{items.length} possible items"
 
   )
