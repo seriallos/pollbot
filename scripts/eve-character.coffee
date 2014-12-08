@@ -587,7 +587,7 @@ module.exports = (robot) ->
                 fuelDuration = moment.duration(tower.fuelHours, 'hours')
                 out = "#{gLocations[tower.moonId]}: #{tower.name} (#{gTypes[tower.typeId]}) is #{tower.stateName}."
                 if tower.stateName == 'Online'
-                  out += "  It has enough fuel for #{fuelDuration.humanize()} and stront for #{Math.round(tower.strontHours)} hours."
+                  out += "  It has enough fuel for #{fuelDuration.humanize()} (#{Math.round(tower.fuelPct)}% full) and stront for #{Math.round(tower.strontHours)} hours."
                 msg.send out
 
       robot.respond /test corp assets/i, (msg) ->
