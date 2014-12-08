@@ -137,6 +137,13 @@ setCorpData = (ircUserName, keyID, vCode, corpId, corpName) ->
 getInventoryAmounts = (corpId) ->
   return robot.brain.get invAmountKey(corpId)
 
+getInventoryAmount = (corpId, itemId) ->
+  amounts = getInventoryAmounts(corpId)
+  if amounts[itemId]?
+    return amounts[itemId]
+  else
+    return null
+
 setInventoryAmounts = (corpId, amounts) ->
   key = invAmountKey corpId
   robot.brain.set key, amounts
@@ -635,11 +642,54 @@ module.exports = (robot) ->
           if items.length == 0
             msg.send "No market item found for '#{itemName}'"
           else if items.length == 1
-            msg.send "1 item found"
+            item = items.pop()
+            setInventoryAmount corp.id, item.itemId, num
+            msg.send "POS inventory amount for #{item.itemName} set to #{num}"
           else if items.length <= maxResults
             itemNames = (item.itemName for item in items)
-            msg.send "Ambiguous search, did you mean one of these: #{itemName.join(', ')}"
+            msg.send "Ambiguous search, did you mean one of these: #{itemNames.join(', ')}"
           else
             msg.send "Search was too generic, returned #{items.length} possible items"
+
+      robot.respond /pos expected (.*)/i, (msg) ->
+        itemName = msg.match[1]
+        corp = getCorpData(getUsername(msg))
+
+        if not corp?
+          msg.send "You don't have a corp API key set up"
+        else
+          maxResults = 10
+          items = itemSearch gTypes, itemName
+          if items.length == 0
+            msg.send "No market item found for '#{itemName}'"
+          else if items.length == 1
+            console.log "here"
+            item = items.pop()
+            amount = getInventoryAmount corp.id, item.itemId
+            msg.send "POS inventory amount for #{item.itemName} is currently #{amount ? amount : 'not set'}"
+          else if items.length <= maxResults
+            itemNames = (item.itemName for item in items)
+            msg.send "Ambiguous search, did you mean one of these: #{itemNames.join(', ')}"
+          else
+            msg.send "Search was too generic, returned #{items.length} possible items"
+
+      robot.respond /pos shopping list/i, (msg) ->
+        corp = getCorpData(getUsername(msg))
+
+        if not corp?
+          msg.send "You don't have a corp API key set up"
+        else
+          expectedAmounts = getInventoryAmounts corp.id
+          corpAssetList corp, (err, assets) ->
+            shoppingList = {}
+            for itemId, amount of expectedAmounts
+              needed = 0
+              if not assets[itemId]
+                needed = amount
+              else if assets[itemId] < amount
+                needed = amount - assets[itemId]
+
+              if needed > 0
+                msg.send "#{gTypes[itemId]}: #{needed}"
 
   )
