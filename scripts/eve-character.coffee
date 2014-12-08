@@ -15,9 +15,12 @@
 #     vCode
 #     ...fields from character API
 #   eve.main.<irc-handle>: <eve-name>
+#   eve.inventoryAmount.<corpId>
 #   eve.corp.<irc-handle>:
 #     keyID
 #     vCode
+#     corpId
+#     corpName
 #
 # Commands:
 #   hubot add char(acter)? <eve-name> <keyID> <vCode> - Links a character to your IRC name
@@ -33,6 +36,9 @@
 #   hubot corp key <keyID> <vCode> - Link a corp to your IRC name
 #   hubot towers - Reports fuel and stront status for corp POSes
 #   hubot pos inventory <item name> - Reports quantity of <item name> in your corp POSes
+#   hubot pos expect <num> <item> - Sets expected amount of item in your POS
+#   hubot pos expected <item> - Gets current expected amount for <item>
+#   hubot pos shopping list - Returns list of items needed to fulfill expected inventory amounts
 
 fs = require 'fs'
 util = require 'util'
@@ -51,19 +57,6 @@ skillLookup = {}
 gLocations = {}
 gTypes = {}
 
-try
-  console.log "Loading Types"
-  gTypes = yaml.safeLoad(fs.readFileSync('./types.yaml'))
-  console.log "Types loaded"
-
-  gTypeNameToId = _.invert gTypes
-
-  console.log "Loading Locations"
-  gLocations = yaml.safeLoad(fs.readFileSync('./locations.yaml'))
-  console.log "Locations loaded"
-catch e
-  console.log e
-  process.exit 2
 
 dd = (obj) ->
   console.log util.inspect(obj,{depth:null})
@@ -108,6 +101,12 @@ corpKey = (ircUserName) ->
   else
     return null
 
+invAmountKey = (corpId) ->
+  if corpId?
+    return "eve.inventoryAmount.#{corpId}"
+  else
+    return null
+
 getMainName = (ircUserName) ->
   return robot.brain.get mainKey(ircUserName)
 
@@ -123,15 +122,31 @@ getChar = (charName) ->
 setChar = (charName, char) ->
   robot.brain.set charKey(charName), char
 
-getCorpApiKey = (ircUserName) ->
+getCorpData = (ircUserName) ->
   return robot.brain.get corpKey(ircUserName)
 
-setCorpApiKey = (ircUserName, keyID, vCode) ->
+setCorpData = (ircUserName, keyID, vCode, corpId, corpName) ->
   key = corpKey(ircUserName)
   data =
     keyID: keyID
     vCode: vCode
+    id: corpId
+    name: corpName
   robot.brain.set key, data
+
+getInventoryAmounts = (corpId) ->
+  return robot.brain.get invAmountKey(corpId)
+
+setInventoryAmounts = (corpId, amounts) ->
+  key = invAmountKey corpId
+  robot.brain.set key, amounts
+
+setInventoryAmount = (corpId, itemId, amount) ->
+  amounts = getInventoryAmounts corpId
+  if not amounts?
+    amounts = {}
+  amounts[itemId] = amount
+  setInventoryAmounts corpId, amounts
 
 getApiErr = (json) ->
   if json.eveapi[0].error?
@@ -206,6 +221,15 @@ skillPoints = (char, done) ->
           for skill in rowset.row
             sp += skill.skillpoints
       done null, sp
+
+corpSheet = (corp, done) ->
+  opts = getBaseOpts corp.keyID, corp.vCode, "corp/CorporationSheet"
+  requestAndJsonify opts, (err, json) ->
+    data = {}
+    data.id = json.eveapi[0].result[0].corporationID
+    data.name = json.eveapi[0].result[0].corporationName
+    data.ticket = json.eveapi[0].result[0].ticker
+    done null, data
 
 corpItemLocation = (corp, itemIds, done) ->
   opts = getBaseOpts corp.keyID, corp.vCode, "corp/Locations"
@@ -404,143 +428,174 @@ corpAssetSearch = (corp, itemId, done) ->
 
 module.exports = (robot) ->
 
-  console.log "Loading skills..."
 
-  loadSkills () ->
+  async.parallel(
+    [
+      (cb) ->
+        console.log "Loading Types"
+        fs.readFile './types.yaml', (err, data) ->
+          gTypes = yaml.safeLoad(data)
+          console.log "Types loaded"
+          gTypeNameToId = _.invert gTypes
+          cb()
+      (cb) ->
+        console.log "Loading Locations"
+        fs.readFile './locations.yaml', (err, data) ->
+          gLocations = yaml.safeLoad(data)
+          console.log "Locations loaded"
+          cb()
+      (cb) ->
+        console.log "Loading skills"
+        loadSkills () ->
+          console.log "Skills loaded"
+          cb()
+    ],
+    (err, results) ->
+      robot.respond /add char(acter)? (.*) (.*) (.*)/i, (msg) ->
+        char = msg.match[2].toLowerCase()
+        keyID = msg.match[3]
+        vCode = msg.match[4]
 
-    console.log "Skills loaded"
-
-    robot.respond /add char(acter)? (.*) (.*) (.*)/i, (msg) ->
-      char = msg.match[2].toLowerCase()
-      keyID = msg.match[3]
-      vCode = msg.match[4]
-
-      characters keyID, vCode, (err, chars) ->
-        if err
-          msg.send "Unable to retrieve characters: #{err}"
-        else
-          if not chars[char]
-            msg.send "#{char} not found for that account"
-          else
-            chars[char].keyID = keyID
-            chars[char].vCode = vCode
-            setChar char, chars[char]
-            if not getMainName(getUsername(msg))
-              setMainName getUsername(msg), char
-              msg.send "Added #{char} as your main character"
-            else
-              msg.send "Added #{char} as an additional character"
-
-    robot.respond /get main( (.*))?$/i, (msg) ->
-      if msg.match[2]?
-        user = msg.match[2]
-      else
-        user = getUsername(msg)
-
-      char = getMainChar(user)
-      if char?
-        msg.send "#{user}'s main character is #{char.name} in #{char.corporationName}."
-      else
-        msg.send "#{user} does not have a main character set.  Look at 'set main' help"
-
-    robot.respond /skill points( (.*))?/i, (msg) ->
-      if msg.match[2]?
-        charName = msg.match[2]
-      else
-        user = getUsername(msg)
-        charName = getMainName(user)
-
-      char = getChar charName
-
-      if not char?
-        msg.send "I don't know about #{charName}"
-      else
-        skillPoints char, (err, points) ->
-          nicePoints = numeral(points).format("0,0")
-          msg.send "#{char.name} has #{nicePoints} SP"
-
-    robot.respond /skill queue( (.*))?/i, (msg) ->
-      if msg.match[2]?
-        charName = msg.match[2]
-      else
-        user = getUsername(msg)
-        charName = getMainName(user)
-
-      char = getChar charName
-
-      if not char?
-        msg.send "I don't know about #{charName}"
-      else
-        skillQueue char, (err, queue) ->
+        characters keyID, vCode, (err, chars) ->
           if err
-            msg.send "Unable to get skill queue: #{err}"
+            msg.send "Unable to retrieve characters: #{err}"
           else
-            count = queue.length
-            firstSkill = queue[0]
-            lastSkill = queue[count - 1]
-
-            serverMoment = moment(lastSkill.serverTime)
-            firstMoment = moment(firstSkill.endTime)
-            lastMoment = moment(lastSkill.endTime)
-
-            queueEndsIn = lastMoment.from(serverMoment, true)
-            firstEndsIn = firstMoment.from(serverMoment, true)
-            firstName = skillLookup[firstSkill.typeID].typeName
-            firstLevel = romanNumeral firstSkill.level
-
-            if count == 0
-              out = "Uh oh! #{char.name} does not have any skills in queue!  LOG IN AND FIX IT!"
+            if not chars[char]
+              msg.send "#{char} not found for that account"
             else
-              out = "#{char.name} is currently training #{firstName} #{firstLevel} which will finish in #{firstEndsIn}."
-              if count > 1
-                out += " #{char.name}'s queue has #{count - 1} additional skill#{if count - 1 == 1 then "" else "s"} which finishes in #{queueEndsIn}."
+              chars[char].keyID = keyID
+              chars[char].vCode = vCode
+              setChar char, chars[char]
+              if not getMainName(getUsername(msg))
+                setMainName getUsername(msg), char
+                msg.send "Added #{char} as your main character"
               else
-                out += " There are no other skills in the queue."
+                msg.send "Added #{char} as an additional character"
 
-            msg.send out
+      robot.respond /get main( (.*))?$/i, (msg) ->
+        if msg.match[2]?
+          user = msg.match[2]
+        else
+          user = getUsername(msg)
 
-    robot.respond /corp key (.*) (.*)/i, (msg) ->
-      username = getUsername msg
-      keyID = msg.match[1]
-      vCode = msg.match[2]
-      setCorpApiKey username, keyID, vCode
-      msg.send "Corp key set for #{username}"
+        char = getMainChar(user)
+        if char?
+          msg.send "#{user}'s main character is #{char.name} in #{char.corporationName}."
+        else
+          msg.send "#{user} does not have a main character set.  Look at 'set main' help"
 
-    robot.respond /towers/i, (msg) ->
-      corp = getCorpApiKey(getUsername(msg))
+      robot.respond /skill points( (.*))?/i, (msg) ->
+        if msg.match[2]?
+          charName = msg.match[2]
+        else
+          user = getUsername(msg)
+          charName = getMainName(user)
 
-      if not corp?
-        msg.send "You don't have a corp API key set up"
-      else
-        posList corp, (err, towers) ->
-          if err
-            msg.send "Unable to get tower list: #{err}"
-          else
-            for towerId, tower of towers
-              fuelDuration = moment.duration(tower.fuelHours, 'hours')
-              out = "#{gLocations[tower.moonId]}: #{tower.name} (#{gTypes[tower.typeId]}) is #{tower.stateName}."
-              if tower.stateName == 'Online'
-                out += "  It has enough fuel for #{fuelDuration.humanize()} and stront for #{Math.round(tower.strontHours)} hours."
+        char = getChar charName
+
+        if not char?
+          msg.send "I don't know about #{charName}"
+        else
+          skillPoints char, (err, points) ->
+            nicePoints = numeral(points).format("0,0")
+            msg.send "#{char.name} has #{nicePoints} SP"
+
+      robot.respond /skill queue( (.*))?/i, (msg) ->
+        if msg.match[2]?
+          charName = msg.match[2]
+        else
+          user = getUsername(msg)
+          charName = getMainName(user)
+
+        char = getChar charName
+
+        if not char?
+          msg.send "I don't know about #{charName}"
+        else
+          skillQueue char, (err, queue) ->
+            if err
+              msg.send "Unable to get skill queue: #{err}"
+            else
+              count = queue.length
+              firstSkill = queue[0]
+              lastSkill = queue[count - 1]
+
+              serverMoment = moment(lastSkill.serverTime)
+              firstMoment = moment(firstSkill.endTime)
+              lastMoment = moment(lastSkill.endTime)
+
+              queueEndsIn = lastMoment.from(serverMoment, true)
+              firstEndsIn = firstMoment.from(serverMoment, true)
+              firstName = skillLookup[firstSkill.typeID].typeName
+              firstLevel = romanNumeral firstSkill.level
+
+              if count == 0
+                out = "Uh oh! #{char.name} does not have any skills in queue!  LOG IN AND FIX IT!"
+              else
+                out = "#{char.name} is currently training #{firstName} #{firstLevel} which will finish in #{firstEndsIn}."
+                if count > 1
+                  out += " #{char.name}'s queue has #{count - 1} additional skill#{if count - 1 == 1 then "" else "s"} which finishes in #{queueEndsIn}."
+                else
+                  out += " There are no other skills in the queue."
+
               msg.send out
 
-    robot.respond /test corp assets/i, (msg) ->
-      corp = getCorpApiKey(getUsername(msg))
+      robot.respond /corp key (.*) (.*)/i, (msg) ->
+        username = getUsername msg
+        corp = {}
+        corp.keyID = msg.match[1]
+        corp.vCode = msg.match[2]
+        corpSheet corp, (err, corpData) ->
+          setCorpData username, corp.keyID, corp.vCode, corpData.id, corpData.name
+          msg.send "Corp key set for #{username}"
 
-      if not corp?
-        msg.send "You don't have a corp API key set up"
-      else
-        corpAssetList corp, (err, assets) ->
-          msg.send "Testing corp assets - data in console"
+      robot.respond /towers/i, (msg) ->
+        corp = getCorpData(getUsername(msg))
 
-    robot.respond /pos inventory (.*)/i, (msg) ->
-      itemName = msg.match[1]
-      corp = getCorpApiKey(getUsername(msg))
+        if not corp?
+          msg.send "You don't have a corp API key set up"
+        else
+          posList corp, (err, towers) ->
+            if err
+              msg.send "Unable to get tower list: #{err}"
+            else
+              for towerId, tower of towers
+                fuelDuration = moment.duration(tower.fuelHours, 'hours')
+                out = "#{gLocations[tower.moonId]}: #{tower.name} (#{gTypes[tower.typeId]}) is #{tower.stateName}."
+                if tower.stateName == 'Online'
+                  out += "  It has enough fuel for #{fuelDuration.humanize()} and stront for #{Math.round(tower.strontHours)} hours."
+                msg.send out
 
-      if not corp?
-        msg.send "You don't have a corp API key set up"
-      else
-        itemId = gTypeNameToId[itemName]
-        corpAssetSearch corp, itemId, (err, quantity) ->
-          if err then msg.send "Error: #{err}"
-          else
-            msg.send "#{itemName}: #{quantity}"
+      robot.respond /test corp assets/i, (msg) ->
+        corp = getCorpData(getUsername(msg))
+
+        if not corp?
+          msg.send "You don't have a corp API key set up"
+        else
+          corpAssetList corp, (err, assets) ->
+            msg.send "Testing corp assets - data in console"
+
+      robot.respond /pos inventory (.*)/i, (msg) ->
+        itemName = msg.match[1]
+        corp = getCorpData(getUsername(msg))
+
+        if not corp?
+          msg.send "You don't have a corp API key set up"
+        else
+          itemId = gTypeNameToId[itemName]
+          corpAssetSearch corp, itemId, (err, quantity) ->
+            if err then msg.send "Error: #{err}"
+            else
+              msg.send "#{itemName}: #{quantity}"
+
+      robot.respond /pos expect ([0-9]+) (.*)/i, (msg) ->
+        num = msg.match[1]
+        itemName = msg.match[2]
+        corp = getCorpData(getUsername(msg))
+
+        if not corp?
+          msg.send "You don't have a corp API key set up"
+        else
+          msg.send "TBD"
+
+  )
