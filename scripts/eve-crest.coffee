@@ -6,14 +6,30 @@
 #
 # Dependencies
 #   lodash
+#   request
+#   numeral
+#   xml2json
+
+util = require 'util'
 
 request = require 'request'
 numeral = require 'numeral'
 _ = require 'lodash'
+parser = require 'xml2json'
 
 prices = {}
 
 apiBase = 'http://public-crest.eveonline.com'
+ecBase = 'http://api.eve-central.com'
+
+dlog = (msg) ->
+  console.log ":: #{msg}"
+
+dd = (obj) ->
+  dlog util.inspect(obj,{depth:null})
+
+parseXmlBodyToJson = (body) ->
+  return parser.toJson(body,{object: true, arrayNotation: true})
 
 loadPrices = (done) ->
   opts =
@@ -49,7 +65,20 @@ findItems = (search) ->
       results.push item
   return results
 
+ecJitaPrices = (itemId, done) ->
+  jitaId = 30000142
+  url = "#{ecBase}/api/marketstat?typeid=#{itemId}&usesystem=#{jitaId}"
+  opts =
+    url: url
+    headers:
+      'User-Agent': 'Eve Hubot plugin by Bellatroix'
 
+  request opts, (err, res, body) ->
+    if err
+      done err, null
+    else
+      json = parser.toJson(body,{object: true})
+      done null, json.evec_api.marketstat.type
 
 module.exports = (robot) ->
 
@@ -72,8 +101,11 @@ module.exports = (robot) ->
           format = '0,0.00'
         else
           format = '0,0'
-        nicePrice = numeral(item.price).format(format)
-        msg.send  "#{item.niceName}: #{nicePrice} ISK"
+        ecJitaPrices item.id, (err, ecPrice) ->
+          nicePrice = numeral(item.price).format(format)
+          jitaSell = numeral(ecPrice.sell.percentile).format(format)
+          jitaBuy = numeral(ecPrice.buy.percentile).format(format)
+          msg.send  "#{item.niceName}: #{jitaSell} (Jita Sell 5%) / #{jitaBuy} (Jita Buy 5%) / #{nicePrice} (Crest Avg)"
       else
         if items
           if items.length < 10
