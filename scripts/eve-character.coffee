@@ -476,6 +476,29 @@ module.exports = (robot) ->
                 inventory[item.typeID] = item.quantity
         done null, inventory
 
+  corpReactionAssets = (corp, done) ->
+    opts = getBaseOpts corp.keyID, corp.vCode, "corp/AssetList"
+    requestAndJsonify opts, (err, json) ->
+      if err then done err
+      else
+        interestingContainers = [
+          'Hybrid Polymer Silo',
+          'Biochemical Silo',
+          'Silo',
+          'Polymer Reactor Array',
+        ]
+        inventory = {}
+        for row in json.eveapi[0].result[0].rowset[0].row
+          locationId = row.locationID
+          containerTypeId = row.typeID
+          if gTypes[containerTypeId] in interestingContainers
+            for item in row.rowset[0].row
+              if inventory[item.typeID]?
+                inventory[item.typeID] += item.quantity
+              else
+                inventory[item.typeID] = item.quantity
+        done null, inventory
+
   corpAssetSearch = (corp, itemIds, done) ->
     corpAssetList corp, (err, inventory) ->
       if err then done err
@@ -660,6 +683,19 @@ module.exports = (robot) ->
                   msg.send "None of the following found: #{itemNames.join(', ')}"
           else
             msg.send "Search was too generic, returned #{items.length} possible items"
+
+      robot.respond /pos reactions/i, (msg) ->
+        corp = getCorpData(getUsername(msg))
+
+        if not corp?
+          msg.send "You don't have a corp API key set up"
+        else
+          corpReactionAssets corp, (err, inventory) ->
+            if err then msg.send "Error: #{err}"
+            else
+              for itemId, amount of inventory
+                msg.send "#{gTypes[itemId]}: #{amount}"
+
 
       robot.respond /pos expect ([0-9]+) (.*)/i, (msg) ->
         num = msg.match[1]
