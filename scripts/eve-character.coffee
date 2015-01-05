@@ -194,22 +194,27 @@ module.exports = (robot) ->
       opts.headers = {}
     opts.headers['User-Agent'] = 'Hubot Plugin by Bellatroix - sollaires@gmail.com (nodejs:request)'
 
+    opts._useCache ?= true
+
     cacheKey = opts.uri + "?" + querystring.stringify(opts.qs)
-    brainCacheKey = apiCacheKey cacheKey
+    if opts._useCache
+      brainCacheKey = apiCacheKey cacheKey
 
-    cacheData = robot.brain.get brainCacheKey
+      cacheData = robot.brain.get brainCacheKey
 
-    nowMomentUnix = moment().format('X')
+      nowMomentUnix = moment().format('X')
 
-    if cacheData? and cacheData.cacheUntil > nowMomentUnix
-      remainingTime = cacheData.cacheUntil - nowMomentUnix
-      cacheExpire = moment().add(remainingTime*1000)
-      duration = moment.duration(cacheExpire,'minutes')
-      dlog "CACHE HIT - valid until #{cacheExpire.format()} (#{duration.humanize()})"
-      done null, cacheData.data
-      return
+      if cacheData? and cacheData.cacheUntil > nowMomentUnix
+        remainingTime = cacheData.cacheUntil - nowMomentUnix
+        cacheExpire = moment().add(remainingTime*1000)
+        duration = moment.duration(cacheExpire,'minutes')
+        dlog "CACHE HIT - valid until #{cacheExpire.format()} (#{duration.humanize()})"
+        done null, cacheData.data
+        return
 
-    dlog "CACHE MISS - fetching #{cacheKey}"
+      dlog "CACHE MISS - fetching #{cacheKey}"
+    else
+      dlog "Cache explicitly turned off for #{cacheKey}"
 
     request opts, (err, res, body) ->
       if err
@@ -264,6 +269,15 @@ module.exports = (robot) ->
           skill.serverTime = json.eveapi.currentTime
           queue.push skill
         done null, queue
+
+  notifications = (char, done) ->
+    opts = getBaseOpts char.keyID, char.vCode, "char/Notifications"
+    opts.qs.characterID = char.characterID
+    opts._useCache = false
+    requestAndJsonify opts, (err, json) ->
+      if err then done err
+      else
+        done json.eveapi[0].result[0].rowset[0].row
 
   skillPoints = (char, done) ->
     opts = getBaseOpts char.keyID, char.vCode, "char/CharacterSheet"
@@ -758,5 +772,83 @@ module.exports = (robot) ->
 
               if needed > 0
                 msg.send "#{gTypes[itemId]}: #{needed}"
+
+      # set up facres notification poller
+      bella = getChar "Bellatroix"
+
+      noteworthyNotificationTypes =
+        2: 'Character deleted'
+        5: 'Alliance war declared'
+        6: 'Alliance war surrender'
+        7: 'Alliance war retracted'
+        8: 'Alliance was invalidated by CONCORD'
+        11: 'Bill not paid because not enough ISK available'
+        16: 'New corp application'
+        18: 'Corp application accepted'
+        19: 'Corp tax rate changed'
+        21: 'Player left corp'
+        27: 'Corp declares war'
+        27: 'Corp declares war'
+        28: 'Corp war has started'
+        29: 'Corp surrenders war'
+        30: 'Corp retracts war'
+        31: 'Corp war invalidated by Concord'
+        37: 'Sovereignty claim fails (alliance)'
+        38: 'Sovereignty claim fails (corporation)'
+        39: 'Sovereignty bill late (alliance)'
+        40: 'Sovereignty bill late (corporation)'
+        41: 'Sovereignty claim lost (alliance)'
+        42: 'Sovereignty claim lost (corporation)'
+        43: 'Sovereignty claim acquired (alliance)'
+        44: 'Sovereignty claim acquired (corporation)'
+        45: 'Alliance anchoring alert'
+        46: 'Alliance structure turns vulnerable'
+        47: 'Alliance structure turns invulnerable'
+        48: 'Sovereignty disruptor anchored'
+        49: 'Structure won/lost'
+        50: 'Corp office lease expiration notice'
+        58: 'Corporation joining factional warfare'
+        59: 'Corporation leaving factional warfare'
+        60: 'Corporation kicked from factional warfare on startup because of too low standing to the faction'
+        61: 'Character kicked from factional warfare on startup because of too low standing to the faction'
+        62: 'Corporation in factional warfare warned on startup because of too low standing to the faction'
+        67: 'Mass transaction reversal message'
+        75: 'Tower alert'
+        76: 'Tower resource alert'
+        77: 'Station aggression message'
+        78: 'Station state change message'
+        79: 'Station conquered message'
+        80: 'Station aggression message'
+        81: 'Corporation requests joining factional warfare'
+        82: 'Corporation requests leaving factional warfare'
+        83: 'Corporation withdrawing a request to join factional warfare'
+        84: 'Corporation withdrawing a request to leave factional warfare'
+        85: 'Corporation liquidation'
+        86: 'Territorial Claim Unit under attack'
+        87: 'Sovereignty Blockade Unit under attack'
+        88: 'Infrastructure Hub under attack'
+        92: 'Corp Kicked'
+        93: 'Customs office has been attacked'
+        94: 'Customs office has entered reinforced'
+        95: 'Customs office has been transferred'
+        96: 'FW Alliance Warning'
+        97: 'FW Alliance Kick'
+        98: 'AllWarCorpJoined Msg'
+        99: 'Ally Joined Defender'
+        100: 'Ally Has Joined a War Aggressor'
+        101: 'Ally Joined War Ally'
+        102: 'New war system: entity is offering assistance in a war.'
+        103: 'War Surrender Offer'
+        104: 'War Surrender Declined'
+
+      pollNotifications = ->
+        notifications bella, (msgs) ->
+          for msg in msgs
+            if noteworthyNotificationTypes[msg.typeID]
+              robot.messageRoom "#adhocracy", "EVE API Notification for Folkvangr! #{noteworthyNotificationTypes[msg.typeID]}"
+
+      pollNotifications()
+
+      setInterval pollNotifications, 31 * 60 * 1000
 
   )
