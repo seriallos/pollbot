@@ -844,11 +844,20 @@ module.exports = (robot) ->
       pollNotifications = ->
         dlog "Checking for new corp notifications..."
         notifications bella, (msgs) ->
+          # make sure messages are sorted ASC by notification ID
+          msgs.sort (a,b) ->
+            return a.notificationID - b.notificationID
           for msg in msgs
-            if noteworthyNotificationTypes[msg.typeID]
-              dlog "Found noteworthy notification"
-              dlog msg.typeID
-              robot.messageRoom "#adhocracy", "Eve Api Notification for Folkvangr: #{noteworthyNotificationTypes[msg.typeID]}"
+            lastMessageId = robot.brain.get "notificationId"
+            curId = msg.notificationID
+            if not robot.brain.get "notificationId" or curId > lastMessageId
+              robot.brain.set "notificationId", curId
+              if noteworthyNotificationTypes[msg.typeID]
+                dlog "Found noteworthy notification"
+                dlog msg.typeID
+                robot.messageRoom "#adhocracy", "Eve Api Notification for Folkvangr: #{noteworthyNotificationTypes[msg.typeID]}"
+            else
+              dlog "notification has already been seen"
 
       pollNotifications()
 
