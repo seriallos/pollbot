@@ -842,10 +842,13 @@ module.exports = (robot) ->
         104: 'War Surrender Declined'
 
       pollNotifications = ->
+        dlog "Checking for new corp notifications..."
         notifications bella, (msgs) ->
           for msg in msgs
             if noteworthyNotificationTypes[msg.typeID]
-              robot.messageRoom "#adhocracy", "EVE API Notification for Folkvangr! #{noteworthyNotificationTypes[msg.typeID]}"
+              dlog "Found noteworthy notification"
+              dlog msg.typeID
+              robot.messageRoom "#adhocracy", "Eve Api Notification for Folkvangr: #{noteworthyNotificationTypes[msg.typeID]}"
 
       pollNotifications()
 
