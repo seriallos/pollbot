@@ -27,8 +27,6 @@
 #   hubot set main <eve-name> - sets an added character as your main
 #   hubot get main - Displays your main EVE character, if set
 #   hubot get main <irc-handle> - Displays the main EVE character for IRC user <name>, if set
-#   hubot get char(acter)?s - Displays all characters you have added
-#   hubot get char(acter)?s <irc-handle> - Displays all characters for the IRC user
 #   hubot skill queue - Displays skill queue information for your main character
 #   hubot skill queue <eve-name> - Displays skill queue information for the specified characters
 #   hubot skill points - Displays your main character's total SP
@@ -577,6 +575,14 @@ module.exports = (robot) ->
         else
           msg.send "#{user} does not have a main character set.  Look at 'set main' help"
 
+      robot.respond /set main (.*)/i, (msg) ->
+        newMain = msg.match[1].toLowerCase()
+
+        setMainName getUsername(msg), newMain
+        console.log getChar(newMain)
+
+        msg.send "#{newMain} is now your main character."
+
       robot.respond /skill points( (.*))?/i, (msg) ->
         if msg.match[2]?
           charName = msg.match[2]
@@ -747,7 +753,7 @@ module.exports = (robot) ->
           else if items.length == 1
             item = items.pop()
             amount = getInventoryAmount corp.id, item.itemId
-            msg.send "POS inventory amount for #{item.itemName} is currently #{amount ? amount : 'not set'}"
+            msg.send "POS inventory amount for #{item.itemName} is currently #{if amount then amount else 'not set'}"
           else if items.length <= maxResults
             itemNames = (item.itemName for item in items)
             msg.send "Ambiguous search, did you mean one of these: #{itemNames.join(', ')}"
@@ -762,7 +768,7 @@ module.exports = (robot) ->
         else
           expectedAmounts = getInventoryAmounts corp.id
           corpAssetList corp, (err, assets) ->
-            shoppingList = {}
+            numItems = 0
             for itemId, amount of expectedAmounts
               needed = 0
               if not assets[itemId]
@@ -771,7 +777,10 @@ module.exports = (robot) ->
                 needed = amount - assets[itemId]
 
               if needed > 0
+                numItems++
                 msg.send "#{gTypes[itemId]}: #{needed}"
+            if numItems == 0
+              msg.send "You've got everything already!"
 
       # set up facres notification poller
       bella = getChar "Bellatroix"
